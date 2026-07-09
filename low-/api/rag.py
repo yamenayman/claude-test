@@ -295,9 +295,10 @@ def answer_question(
     provider: str | None = None,
     model: str | None = None,
 ) -> RAGResponse:
+    from api.retrieval import retrieve
+
     question_concepts = detect_concepts(question)
-    query_vector = embed_question(question, settings)
-    retrieved = retrieve_chunks(query_vector, k, settings)
+    retrieved, _backend = retrieve(question, k, settings)
     reranked = rerank_chunks(
         question,
         retrieved,

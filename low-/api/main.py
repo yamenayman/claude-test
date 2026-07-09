@@ -25,6 +25,7 @@ from api.observability import (
 )
 from api.providers import provider_statuses, resolve_provider
 from api.rag import answer_question
+from api.retrieval import resolve_backend
 
 
 SERVICE_NAME = "lawz-ai-jo-api"
@@ -106,8 +107,17 @@ def create_app() -> FastAPI:
 
     @app.get("/readyz")
     def readyz(settings: Settings = Depends(get_settings)):
+        backend = resolve_backend(settings)
+        retrieval_status: dict[str, object] = {"backend": backend}
+        if backend == "weaviate":
+            weaviate_state = check_weaviate_ready(settings)
+            retrieval_status.update(weaviate_state)
+            retrieval_status["ok"] = bool(weaviate_state.get("ok"))
+        else:
+            # The offline local backend needs no external service.
+            retrieval_status["ok"] = True
         dependencies = {
-            "weaviate": check_weaviate_ready(settings),
+            "retrieval": retrieval_status,
             "llm": check_llm_ready(settings),
         }
         ready = all(bool(item.get("ok")) for item in dependencies.values())

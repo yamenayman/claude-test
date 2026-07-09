@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     rag_prompt_top_n: int = 3
     chunk_text_limit: int = 900
 
+    # Retrieval backend: "auto" (Weaviate when reachable, else local),
+    # "weaviate" (force dense vector search), or "local" (offline BM25 + KG).
+    retrieval_backend: str = "auto"
+
     ollama_base_url: str = "http://host.docker.internal:11434"
     ollama_model: str = "qwen3:4b"
     ollama_timeout_seconds: float = 120

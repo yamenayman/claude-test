@@ -84,19 +84,30 @@ export default function StatusPage() {
 
         <div className="card">
           <div className="cardTitle">
-            <StatusDot ok={Boolean(dependencies.weaviate && dependencies.weaviate.ok)} /> مخزن المتجهات
-            Weaviate
+            <StatusDot ok={Boolean(dependencies.retrieval && dependencies.retrieval.ok)} /> محرّك الاسترجاع
+          </div>
+          <div className="statusRow">
+            <span>الخلفية النشطة</span>
+            <span className="statusVal">
+              {dependencies.retrieval
+                ? dependencies.retrieval.backend === "local"
+                  ? "local (BM25 + KG)"
+                  : "weaviate"
+                : "-"}
+            </span>
           </div>
           <div className="statusRow">
             <span>جاهز</span>
             <span className="statusVal">
-              {dependencies.weaviate ? String(dependencies.weaviate.ok) : "غير متاح"}
+              {dependencies.retrieval ? String(dependencies.retrieval.ok) : "غير متاح"}
             </span>
           </div>
-          <div className="statusRow">
-            <span>العنوان</span>
-            <span className="statusVal">{dependencies.weaviate ? dependencies.weaviate.url : "-"}</span>
-          </div>
+          {dependencies.retrieval && dependencies.retrieval.url && (
+            <div className="statusRow">
+              <span>العنوان</span>
+              <span className="statusVal">{dependencies.retrieval.url}</span>
+            </div>
+          )}
         </div>
 
         <div className="card">
