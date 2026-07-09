@@ -1,15 +1,41 @@
 from __future__ import annotations
 
-import re
 from functools import lru_cache
 from typing import Any
 
 import numpy as np
 
-from api.generator import INSUFFICIENT_ANSWER, GeneratorError, clean_llm_output, generate_answer
-from api.models import Citation, RAGResponse, RetrievedChunk
+from api import providers
+from api.generator import INSUFFICIENT_ANSWER, GeneratorError
+from api.kg import CONCEPT_LEXICON, detect_concepts, get_knowledge_graph
+from api.models import Citation, KGConceptRef, KGInsight, RAGResponse, RetrievedChunk
 from api.settings import Settings
+from api.text_normalize import (
+    ARABIC_VARIANTS,
+    DIACRITICS_RE,
+    STOPWORDS,
+    TOKEN_RE,
+    WHITESPACE_RE,
+    normalize_arabic_text,
+    tokenize_for_overlap,
+)
 
+__all__ = [
+    "DISCLAIMER",
+    "SYSTEM_PROMPT",
+    "ARABIC_VARIANTS",
+    "DIACRITICS_RE",
+    "WHITESPACE_RE",
+    "TOKEN_RE",
+    "STOPWORDS",
+    "normalize_arabic_text",
+    "tokenize_for_overlap",
+    "answer_question",
+    "encode_texts",
+    "format_passage_for_embedding",
+    "format_query_for_embedding",
+    "rerank_chunks",
+]
 
 DISCLAIMER = "هذا شرح أولي مبني على المصادر المسترجعة ولا يُعد استشارة قانونية ولا يغني عن مراجعة محامٍ مختص أو النص القانوني الرسمي."
 
@@ -22,52 +48,6 @@ SYSTEM_PROMPT = """أنت مساعد معلوماتي لمشروع Lawz AI JO.
 لا تعرض خطوات التفكير.
 لا تكتب <think>.
 أجب مباشرة وباختصار."""
-
-ARABIC_VARIANTS = str.maketrans(
-    {
-        "أ": "ا",
-        "إ": "ا",
-        "آ": "ا",
-        "ى": "ي",
-        "ة": "ه",
-        "ؤ": "و",
-        "ئ": "ي",
-    }
-)
-DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670]")
-WHITESPACE_RE = re.compile(r"\s+")
-TOKEN_RE = re.compile(r"[\w\u0600-\u06FF]+", flags=re.UNICODE)
-STOPWORDS = {
-    "في",
-    "من",
-    "على",
-    "عن",
-    "الى",
-    "إلى",
-    "هل",
-    "ما",
-    "هو",
-    "هي",
-    "او",
-    "أو",
-    "لا",
-    "اذا",
-    "إذا",
-    "ذلك",
-    "هذا",
-    "هذه",
-}
-
-
-def normalize_arabic_text(text: str) -> str:
-    text = (text or "").strip().translate(ARABIC_VARIANTS)
-    text = DIACRITICS_RE.sub("", text)
-    return WHITESPACE_RE.sub(" ", text)
-
-
-def tokenize_for_overlap(text: str) -> set[str]:
-    normalized = normalize_arabic_text(text)
-    return {token for token in TOKEN_RE.findall(normalized) if len(token) > 1 and token not in STOPWORDS}
 
 
 def uses_e5_prefix(model_name: str) -> bool:
@@ -152,8 +132,22 @@ def retrieve_chunks(question_vector: list[float], k: int, settings: Settings) ->
     return chunks
 
 
-def rerank_chunks(question: str, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def rerank_chunks(
+    question: str,
+    chunks: list[dict[str, Any]],
+    question_concepts: list[str] | None = None,
+    kg_boost_per_concept: float = 0.04,
+) -> list[dict[str, Any]]:
+    """Lexical-overlap rerank with an optional knowledge-graph concept boost.
+
+    A chunk that shares legal concepts with the question (e.g. both mention
+    "الفصل التعسفي") gets a small additive boost per shared concept, so
+    graph-relevant chunks win ties against merely vector-similar ones.
+    """
     question_tokens = tokenize_for_overlap(question)
+    concepts = set(question_concepts or [])
+    kg = get_knowledge_graph() if concepts else None
+
     reranked: list[dict[str, Any]] = []
     for chunk in chunks:
         searchable = " ".join(
@@ -164,10 +158,21 @@ def rerank_chunks(question: str, chunks: list[dict[str, Any]]) -> list[dict[str,
             ]
         )
         overlap_count = len(question_tokens & tokenize_for_overlap(searchable))
-        final_score = min(1.0, float(chunk.get("vector_score") or 0.0) + 0.05 * overlap_count)
+        score = float(chunk.get("vector_score") or 0.0) + 0.05 * overlap_count
+
+        shared_concepts: list[str] = []
+        if kg is not None:
+            chunk_id = str(chunk.get("chunk_id") or "")
+            chunk_concepts = kg.chunk_concepts.get(chunk_id)
+            if chunk_concepts is None:
+                chunk_concepts = detect_concepts(str(chunk.get("text") or ""))
+            shared_concepts = [cid for cid in chunk_concepts if cid in concepts]
+            score += kg_boost_per_concept * len(shared_concepts)
+
         updated = dict(chunk)
-        updated["score"] = round(final_score, 4)
+        updated["score"] = round(min(1.0, score), 4)
         updated["overlap_count"] = overlap_count
+        updated["kg_concepts"] = shared_concepts
         reranked.append(updated)
 
     return sorted(reranked, key=lambda item: item["score"], reverse=True)
@@ -212,6 +217,7 @@ Rules:
 
 
 def build_citations(chunks: list[dict[str, Any]]) -> list[Citation]:
+    kg = get_knowledge_graph()
     citations: list[Citation] = []
     seen: set[str] = set()
     for chunk in chunks:
@@ -226,6 +232,7 @@ def build_citations(chunks: list[dict[str, Any]]) -> list[Citation]:
                 reference=str(chunk.get("reference") or ""),
                 topic=str(chunk.get("topic") or ""),
                 source_page=chunk.get("source_page"),
+                articles=kg.chunk_articles.get(chunk_id, []),
             )
         )
     return citations
@@ -234,6 +241,11 @@ def build_citations(chunks: list[dict[str, Any]]) -> list[Citation]:
 def build_retrieved_preview(chunks: list[dict[str, Any]]) -> list[RetrievedChunk]:
     previews: list[RetrievedChunk] = []
     for chunk in chunks:
+        concept_labels = [
+            CONCEPT_LEXICON[cid]["label"]
+            for cid in chunk.get("kg_concepts") or []
+            if cid in CONCEPT_LEXICON
+        ]
         previews.append(
             RetrievedChunk(
                 chunk_id=str(chunk.get("chunk_id") or ""),
@@ -241,15 +253,59 @@ def build_retrieved_preview(chunks: list[dict[str, Any]]) -> list[RetrievedChunk
                 reference=str(chunk.get("reference") or ""),
                 score=float(chunk.get("score") or 0.0),
                 text_preview=truncate_text(str(chunk.get("text") or ""), 260),
+                kg_concepts=concept_labels,
             )
         )
     return previews
 
 
-def answer_question(question: str, k: int, settings: Settings) -> RAGResponse:
+def build_kg_insight(
+    question_concepts: list[str],
+    prompt_chunks: list[dict[str, Any]],
+    reranked: list[dict[str, Any]],
+) -> KGInsight:
+    kg = get_knowledge_graph()
+    related_articles: list[int] = []
+    for chunk in prompt_chunks:
+        chunk_id = str(chunk.get("chunk_id") or "")
+        for number in kg.chunk_articles.get(chunk_id, []):
+            if number not in related_articles:
+                related_articles.append(number)
+
+    related = [
+        KGConceptRef(id=item["id"], label=item["label"])
+        for item in kg.related_concepts(question_concepts, limit=6)
+    ]
+    return KGInsight(
+        question_concepts=[
+            KGConceptRef(id=f"concept:{cid}", label=CONCEPT_LEXICON[cid]["label"])
+            for cid in question_concepts
+            if cid in CONCEPT_LEXICON
+        ],
+        related_concepts=related,
+        related_articles=sorted(related_articles),
+        boosted_chunks=sum(1 for chunk in reranked if chunk.get("kg_concepts")),
+    )
+
+
+def answer_question(
+    question: str,
+    k: int,
+    settings: Settings,
+    provider: str | None = None,
+    model: str | None = None,
+) -> RAGResponse:
+    question_concepts = detect_concepts(question)
     query_vector = embed_question(question, settings)
     retrieved = retrieve_chunks(query_vector, k, settings)
-    reranked = rerank_chunks(question, retrieved)
+    reranked = rerank_chunks(
+        question,
+        retrieved,
+        question_concepts=question_concepts,
+        kg_boost_per_concept=settings.kg_boost_per_concept,
+    )
+
+    kg_insight = build_kg_insight(question_concepts, reranked[: settings.rag_prompt_top_n], reranked)
 
     if not reranked:
         return RAGResponse(
@@ -258,16 +314,17 @@ def answer_question(question: str, k: int, settings: Settings) -> RAGResponse:
             confidence=0.0,
             retrieved_chunks=[],
             disclaimer=DISCLAIMER,
+            kg=kg_insight,
         )
 
     prompt_chunks = reranked[: settings.rag_prompt_top_n]
     user_prompt = build_user_prompt(question, prompt_chunks, settings)
     try:
-        answer = generate_answer(SYSTEM_PROMPT, user_prompt, settings)
+        generation = providers.generate(SYSTEM_PROMPT, user_prompt, settings, provider=provider, model=model)
     except GeneratorError:
         raise
 
-    answer = clean_llm_output(answer)
+    answer = generation.text
     confidence = 0.0 if INSUFFICIENT_ANSWER in answer else float(prompt_chunks[0].get("score") or 0.0)
 
     return RAGResponse(
@@ -276,4 +333,8 @@ def answer_question(question: str, k: int, settings: Settings) -> RAGResponse:
         confidence=round(min(1.0, max(0.0, confidence)), 3),
         retrieved_chunks=build_retrieved_preview(reranked[:k]),
         disclaimer=DISCLAIMER,
+        provider=generation.provider,
+        model=generation.model,
+        latency_ms=generation.latency_ms,
+        kg=kg_insight,
     )

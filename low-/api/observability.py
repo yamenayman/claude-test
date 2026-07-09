@@ -19,7 +19,20 @@ RAG_ANSWERS_TOTAL = Counter("rag_answers_total", "RAG answers by outcome.", ["ou
 RAG_RETRIEVED_CHUNKS = Histogram("rag_retrieved_chunks", "Number of retrieved chunks per RAG request.")
 RAG_GENERATION_ERRORS_TOTAL = Counter("rag_generation_errors_total", "RAG generation errors.")
 
-KNOWN_PATHS = {"/healthz", "/readyz", "/metrics", "/rag/answer"}
+KNOWN_PATHS = {
+    "/healthz",
+    "/readyz",
+    "/metrics",
+    "/rag/answer",
+    "/llm/providers",
+    "/kg/overview",
+    "/kg/graph",
+    "/kg/concepts",
+    "/kg/search",
+    "/corpus/chunks",
+    "/corpus/topics",
+}
+KNOWN_PREFIXES = {"/kg/node/": "/kg/node"}
 LOGGER = logging.getLogger("lawz_ai_jo")
 
 if not LOGGER.handlers:
@@ -35,7 +48,12 @@ def utc_now_iso() -> str:
 
 
 def safe_metric_path(path: str) -> str:
-    return path if path in KNOWN_PATHS else "other"
+    if path in KNOWN_PATHS:
+        return path
+    for prefix, label in KNOWN_PREFIXES.items():
+        if path.startswith(prefix):
+            return label
+    return "other"
 
 
 def log_json(event: dict[str, Any]) -> None:

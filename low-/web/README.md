@@ -1,6 +1,18 @@
 # Lawz AI JO Web
 
-Simple Next.js UI for asking Arabic Jordanian labor-law questions.
+Professional Arabic RTL Next.js UI for the Jordanian labor-law assistant.
+
+## Pages
+
+| Path | Page |
+| --- | --- |
+| `/` | Assistant: ask questions, pick the LLM provider, view cited answers with confidence and knowledge-graph insights, local question history. |
+| `/graph` | Interactive knowledge-graph explorer (canvas force layout, no external chart libraries). |
+| `/library` | Read-only legal-corpus browser with search, topic, and source filters. |
+| `/status` | Live system status: API, Weaviate, LLM providers, knowledge graph. |
+| `/about` | Project scope, architecture, and limits. |
+
+Light/dark themes (auto + manual toggle) with a Jordan-inspired palette.
 
 ## Local run
 
