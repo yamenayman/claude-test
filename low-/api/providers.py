@@ -112,14 +112,20 @@ def _generate_anthropic(system_prompt: str, user_prompt: str, settings: Settings
         timeout=settings.llm_timeout_seconds,
         max_retries=2,
     )
+    # For grounded, concise legal answers we don't need extended thinking, and
+    # omitting the parameter keeps the call valid across every Claude model
+    # (adaptive thinking is rejected by e.g. Haiku 4.5). Opt in only when the
+    # operator sets ANTHROPIC_THINKING=adaptive for a thinking-capable model.
+    request: dict[str, object] = {
+        "model": model,
+        "max_tokens": settings.llm_max_tokens,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_prompt}],
+    }
+    if (settings.anthropic_thinking or "").strip().lower() == "adaptive":
+        request["thinking"] = {"type": "adaptive"}
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=settings.llm_max_tokens,
-            thinking={"type": "adaptive"},
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
+        response = client.messages.create(**request)
     except anthropic.APIError as exc:
         raise GeneratorError(str(exc)) from exc
 

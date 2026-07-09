@@ -31,6 +31,9 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-opus-4-8"
+    # Set to "adaptive" to enable adaptive thinking (only on thinking-capable
+    # models such as Opus/Sonnet 4.6+). Leave empty for Haiku and others.
+    anthropic_thinking: str = ""
 
     # Knowledge-graph score boost applied per shared concept during rerank.
     kg_boost_per_concept: float = 0.04
