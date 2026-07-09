@@ -83,12 +83,17 @@ def create_app() -> FastAPI:
 
     allowed_origins = {
         settings.web_origin,
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
         "http://localhost:3001",
         "http://127.0.0.1:3001",
     }
     app.add_middleware(
         CORSMiddleware,
         allow_origins=sorted(allowed_origins),
+        # Also allow localhost/preview hosts on any port so the dev UI can
+        # reach the API when served from a proxied preview origin.
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
