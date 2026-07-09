@@ -15,6 +15,22 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3:4b"
     ollama_timeout_seconds: float = 120
 
+    # LLM provider selection: "ollama" (local, default), "openai" (any
+    # OpenAI-compatible API), or "anthropic" (Claude API).
+    llm_provider: str = "ollama"
+    llm_timeout_seconds: float = 120
+    llm_max_tokens: int = 4096
+
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_api_key: str = ""
+    openai_model: str = ""
+
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-opus-4-8"
+
+    # Knowledge-graph score boost applied per shared concept during rerank.
+    kg_boost_per_concept: float = 0.04
+
     api_url: str = "http://api:8000"
     next_public_api_url: str = "http://localhost:8001"
     web_origin: str = "http://localhost:3001"

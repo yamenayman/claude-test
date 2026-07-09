@@ -1,282 +1,336 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { apiGet, apiPost } from "../lib/api";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
-
-const sampleQuestions = [
+const SAMPLE_QUESTIONS = [
   "هل يجوز إنهاء عقد العمل بدون إشعار؟",
   "ما المقصود بالفصل التعسفي؟",
   "ما حقوق العامل في الإجازة السنوية؟",
   "هل يجوز الخصم من أجر العامل؟",
+  "كم عدد ساعات العمل الأسبوعية القانونية؟",
+  "ما مدة إجازة الأمومة للعاملة؟",
 ];
 
+const HISTORY_KEY = "lawz-history-v1";
+const HISTORY_LIMIT = 12;
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveHistory(history) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, HISTORY_LIMIT)));
+  } catch (e) {
+    /* storage unavailable */
+  }
+}
+
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn btnGhost"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1600);
+        } catch (e) {
+          /* clipboard unavailable */
+        }
+      }}
+    >
+      {copied ? "✓ تم النسخ" : "⧉ نسخ الإجابة"}
+    </button>
+  );
+}
+
+function AnswerCard({ entry }) {
+  const result = entry.result;
+  const confidence = Math.round((result.confidence || 0) * 100);
+  return (
+    <article className="card" style={{ marginBottom: 18 }}>
+      <div className="qaQuestion">
+        <span className="qMark">؟</span>
+        <span>{entry.question}</span>
+      </div>
+
+      <div className="answerMeta">
+        {result.provider && <span className="chip chipGreen">المزوّد: {result.provider}</span>}
+        {result.model && (
+          <span className="chip" style={{ direction: "ltr" }}>
+            {result.model}
+          </span>
+        )}
+        {typeof result.latency_ms === "number" && (
+          <span className="chip">⏱ {(result.latency_ms / 1000).toFixed(1)} ث</span>
+        )}
+        {result.kg && result.kg.boosted_chunks > 0 && (
+          <span className="chip chipGold">🕸 عزّز الرسم المعرفي {result.kg.boosted_chunks} نصوص</span>
+        )}
+      </div>
+
+      <p className="answerText">{result.answer}</p>
+
+      <div className="confidenceRow">
+        <span>الثقة</span>
+        <div className="confidenceBar">
+          <div className="confidenceFill" style={{ width: `${confidence}%` }} />
+        </div>
+        <span style={{ fontFamily: "var(--mono)" }}>{confidence}%</span>
+        <CopyButton text={result.answer} />
+      </div>
+
+      {result.kg &&
+        (result.kg.question_concepts.length > 0 ||
+          result.kg.related_articles.length > 0 ||
+          result.kg.related_concepts.length > 0) && (
+          <>
+            <p className="sectionLabel">رؤى الرسم المعرفي</p>
+            <div className="answerMeta" style={{ margin: 0 }}>
+              {result.kg.question_concepts.map((concept) => (
+                <Link
+                  key={concept.id}
+                  href={`/graph?node=${encodeURIComponent(concept.id)}`}
+                  className="chip chipGreen chipBtn"
+                >
+                  🧩 {concept.label}
+                </Link>
+              ))}
+              {result.kg.related_articles.map((num) => (
+                <Link
+                  key={`art-${num}`}
+                  href={`/graph?node=${encodeURIComponent(`article:${num}`)}`}
+                  className="chip chipGold chipBtn"
+                >
+                  § المادة {num}
+                </Link>
+              ))}
+              {result.kg.related_concepts.map((concept) => (
+                <Link
+                  key={concept.id}
+                  href={`/graph?node=${encodeURIComponent(concept.id)}`}
+                  className="chip chipBtn"
+                >
+                  ↝ {concept.label}
+                </Link>
+              ))}
+            </div>
+          </>
+        )}
+
+      {result.citations && result.citations.length > 0 && (
+        <>
+          <p className="sectionLabel">المراجع المعتمدة</p>
+          <ul className="citationList">
+            {result.citations.map((citation) => (
+              <li key={citation.chunk_id} className="citationItem">
+                <strong>{citation.topic}</strong>
+                <span>{citation.reference}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {result.retrieved_chunks && result.retrieved_chunks.length > 0 && (
+        <>
+          <p className="sectionLabel">النصوص المسترجعة ({result.retrieved_chunks.length})</p>
+          <div style={{ display: "grid", gap: 8 }}>
+            {result.retrieved_chunks.map((chunk) => (
+              <details key={chunk.chunk_id} className="chunkDetails">
+                <summary>
+                  <span className="scorePill">{chunk.score.toFixed(3)}</span>
+                  <span>{chunk.topic}</span>
+                  {chunk.kg_concepts && chunk.kg_concepts.length > 0 && (
+                    <span className="chip chipGreen" style={{ fontSize: 11.5 }}>
+                      🕸 {chunk.kg_concepts.join("، ")}
+                    </span>
+                  )}
+                </summary>
+                <div className="chunkBody">
+                  <p style={{ margin: "0 0 6px", fontWeight: 700 }}>{chunk.reference}</p>
+                  <p style={{ margin: 0 }}>{chunk.text_preview}</p>
+                </div>
+              </details>
+            ))}
+          </div>
+        </>
+      )}
+
+      <p className="disclaimer">⚠ {result.disclaimer}</p>
+    </article>
+  );
+}
+
 export default function Home() {
-  const [question, setQuestion] = useState(sampleQuestions[0]);
-  const [result, setResult] = useState(null);
+  const [question, setQuestion] = useState("");
+  const [k, setK] = useState(5);
+  const [provider, setProvider] = useState("");
+  const [providers, setProviders] = useState([]);
+  const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState("");
+  const timerRef = useRef(null);
 
-  async function askQuestion(event) {
-    event.preventDefault();
-    setLoading(true);
-    setError("");
-    setResult(null);
+  useEffect(() => {
+    setHistory(loadHistory());
+    apiGet("/llm/providers")
+      .then((data) => setProviders(data.providers || []))
+      .catch(() => setProviders([]));
+    return () => clearInterval(timerRef.current);
+  }, []);
 
-    try {
-      const response = await fetch(`${API_URL}/rag/answer`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, k: 5 }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "تعذر الحصول على إجابة.");
+  const askQuestion = useCallback(
+    async (event) => {
+      if (event) event.preventDefault();
+      const trimmed = question.trim();
+      if (trimmed.length < 2 || loading) return;
+
+      setLoading(true);
+      setError("");
+      setElapsed(0);
+      const started = Date.now();
+      timerRef.current = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
+
+      try {
+        const payload = { question: trimmed, k };
+        if (provider) payload.provider = provider;
+        const result = await apiPost("/rag/answer", payload);
+        const entry = { id: `${Date.now()}`, question: trimmed, result, at: new Date().toISOString() };
+        setHistory((prev) => {
+          const next = [entry, ...prev].slice(0, HISTORY_LIMIT);
+          saveHistory(next);
+          return next;
+        });
+        setQuestion("");
+      } catch (err) {
+        setError(err.message || "تعذر الاتصال بالخدمة.");
+      } finally {
+        clearInterval(timerRef.current);
+        setLoading(false);
       }
-      setResult(data);
-    } catch (err) {
-      setError(err.message || "تعذر الاتصال بالخدمة.");
-    } finally {
-      setLoading(false);
-    }
+    },
+    [question, k, provider, loading]
+  );
+
+  function clearHistory() {
+    setHistory([]);
+    saveHistory([]);
   }
 
+  const activeProvider = providers.find((p) => (provider ? p.id === provider : p.active));
+
   return (
-    <main dir="rtl" lang="ar">
-      <section className="shell">
-        <header>
-          <p className="eyebrow">مساعد معلوماتي مبني على RAG</p>
-          <h1>Lawz AI JO</h1>
-          <p className="subtitle">
-            مساعد عربي مبسط لأسئلة قانون العمل الأردني، يعتمد على استرجاع النصوص القانونية ثم توليد إجابة
-            موثقة بالمراجع المسترجعة.
-          </p>
-        </header>
+    <>
+      <div className="pageHead">
+        <p className="eyebrow">استرجاع معزّز بالرسم المعرفي · RAG + Knowledge Graph</p>
+        <h1>اسأل عن قانون العمل الأردني</h1>
+        <p className="lede">
+          اكتب سؤالك بالعربية، وسيسترجع النظام النصوص القانونية ذات الصلة من قانون العمل الأردني رقم 8 لسنة
+          1996 وتعديلاته، ويستعين بشبكة المفاهيم القانونية، ثم يولّد إجابة موثقة بالمراجع.
+        </p>
+      </div>
 
-        <form onSubmit={askQuestion} className="askBox">
-          <label htmlFor="question">السؤال</label>
-          <textarea
-            id="question"
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            rows={5}
-            placeholder="اكتب سؤالك بالعربية..."
-          />
-          <div className="actions">
-            <button type="submit" disabled={loading || question.trim().length < 2}>
-              {loading ? "جارٍ السؤال..." : "اسأل"}
-            </button>
+      <form onSubmit={askQuestion} className="card">
+        <label htmlFor="question">سؤالك القانوني</label>
+        <textarea
+          id="question"
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) askQuestion(event);
+          }}
+          placeholder="مثال: هل يجوز إنهاء عقد العمل بدون إشعار؟"
+        />
+        <div className="askControls">
+          <div className="field">
+            <label htmlFor="provider">نموذج الذكاء الاصطناعي</label>
+            <select id="provider" value={provider} onChange={(event) => setProvider(event.target.value)}>
+              <option value="">الافتراضي (من إعدادات الخادم)</option>
+              {providers.map((item) => (
+                <option key={item.id} value={item.id} disabled={!item.available}>
+                  {item.label}
+                  {item.model ? ` — ${item.model}` : ""}
+                  {item.available ? "" : " (غير مهيأ)"}
+                </option>
+              ))}
+            </select>
           </div>
-        </form>
-
+          <div className="field" style={{ maxWidth: 190 }}>
+            <label htmlFor="k">عدد النصوص المسترجعة: {k}</label>
+            <input
+              id="k"
+              type="range"
+              min={1}
+              max={10}
+              value={k}
+              onChange={(event) => setK(Number(event.target.value))}
+            />
+          </div>
+          <button type="submit" className="btn btnPrimary" disabled={loading || question.trim().length < 2}>
+            {loading ? "جارٍ توليد الإجابة…" : "اسأل الآن"}
+          </button>
+        </div>
+        {activeProvider && !activeProvider.available && (
+          <p className="error" style={{ marginTop: 12 }}>
+            المزوّد المحدد غير جاهز حالياً — تحقق من صفحة حالة النظام.
+          </p>
+        )}
         <div className="samples">
-          {sampleQuestions.map((sample) => (
-            <button key={sample} type="button" onClick={() => setQuestion(sample)}>
+          {SAMPLE_QUESTIONS.map((sample) => (
+            <button
+              key={sample}
+              type="button"
+              className="chip chipBtn"
+              style={{ border: "1px dashed var(--border-strong)", background: "transparent" }}
+              onClick={() => setQuestion(sample)}
+            >
               {sample}
             </button>
           ))}
         </div>
+      </form>
 
-        {error && <p className="error">{error}</p>}
-
-        {result && (
-          <section className="result">
-            <div className="answer">
-              <h2>الإجابة</h2>
-              <p>{result.answer}</p>
-              <p className="confidence">الثقة: {Math.round((result.confidence || 0) * 100)}%</p>
+      {loading && (
+        <div className="card loadingBox" style={{ marginTop: 18 }}>
+          <div className="spinner" />
+          <div>
+            <strong>يجري الاسترجاع والتوليد…</strong>
+            <div style={{ color: "var(--text-2)", fontSize: 14 }}>
+              {elapsed} ثانية — النماذج المحلية قد تستغرق دقائق، ومزوّدو API أسرع بكثير.
             </div>
+          </div>
+        </div>
+      )}
 
-            <div>
-              <h2>المراجع</h2>
-              {result.citations?.length ? (
-                <ul>
-                  {result.citations.map((citation) => (
-                    <li key={citation.chunk_id}>
-                      <strong>{citation.topic}</strong>
-                      <span>{citation.reference}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p>لا توجد مراجع مسترجعة.</p>
-              )}
-            </div>
+      {error && (
+        <p className="error" style={{ marginTop: 18 }}>
+          {error}
+        </p>
+      )}
 
-            <div>
-              <h2>النصوص المسترجعة</h2>
-              {result.retrieved_chunks?.map((chunk) => (
-                <article key={chunk.chunk_id} className="chunk">
-                  <div>
-                    <strong>{chunk.topic}</strong>
-                    <span>{chunk.reference}</span>
-                  </div>
-                  <p>{chunk.text_preview}</p>
-                </article>
-              ))}
-            </div>
-
-            <p className="disclaimer">{result.disclaimer}</p>
-          </section>
-        )}
-      </section>
-
-      <style jsx global>{`
-        * {
-          box-sizing: border-box;
-        }
-        body {
-          margin: 0;
-          background: #f6f7f8;
-          color: #17202a;
-          font-family: Arial, "Tahoma", sans-serif;
-        }
-        main {
-          min-height: 100vh;
-          padding: 32px 16px;
-        }
-        .shell {
-          width: min(980px, 100%);
-          margin: 0 auto;
-        }
-        header {
-          margin-bottom: 24px;
-        }
-        .eyebrow {
-          margin: 0 0 8px;
-          color: #54705f;
-          font-size: 14px;
-          font-weight: 700;
-        }
-        h1 {
-          margin: 0;
-          font-size: 40px;
-          letter-spacing: 0;
-        }
-        h2 {
-          margin: 0 0 12px;
-          font-size: 20px;
-        }
-        .subtitle {
-          max-width: 760px;
-          margin: 12px 0 0;
-          line-height: 1.8;
-          color: #45515d;
-        }
-        .askBox,
-        .result {
-          background: #ffffff;
-          border: 1px solid #dfe5e8;
-          border-radius: 8px;
-          padding: 20px;
-        }
-        label {
-          display: block;
-          margin-bottom: 8px;
-          font-weight: 700;
-        }
-        textarea {
-          width: 100%;
-          resize: vertical;
-          border: 1px solid #cfd8dc;
-          border-radius: 6px;
-          padding: 12px;
-          font: inherit;
-          line-height: 1.7;
-          background: #fbfcfc;
-        }
-        textarea:focus {
-          outline: 2px solid #8fb8a2;
-          border-color: #54705f;
-        }
-        .actions {
-          display: flex;
-          justify-content: flex-start;
-          margin-top: 12px;
-        }
-        button {
-          border: 1px solid #8ca69a;
-          border-radius: 6px;
-          background: #ffffff;
-          color: #17202a;
-          padding: 10px 14px;
-          font: inherit;
-          cursor: pointer;
-        }
-        .actions button {
-          background: #315948;
-          border-color: #315948;
-          color: #ffffff;
-          min-width: 96px;
-        }
-        button:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-        .samples {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-          margin: 14px 0 22px;
-        }
-        .error {
-          border: 1px solid #e6a4a4;
-          background: #fff3f3;
-          color: #8a1f1f;
-          border-radius: 6px;
-          padding: 12px;
-        }
-        .result {
-          display: grid;
-          gap: 22px;
-        }
-        .answer p,
-        .chunk p,
-        .disclaimer {
-          line-height: 1.8;
-        }
-        .confidence {
-          color: #54705f;
-          font-weight: 700;
-        }
-        ul {
-          margin: 0;
-          padding: 0;
-          list-style: none;
-          display: grid;
-          gap: 10px;
-        }
-        li,
-        .chunk {
-          border: 1px solid #e4e9eb;
-          border-radius: 8px;
-          padding: 12px;
-          background: #fbfcfc;
-        }
-        li span,
-        .chunk span {
-          display: block;
-          margin-top: 6px;
-          color: #586772;
-          line-height: 1.6;
-        }
-        .disclaimer {
-          margin: 0;
-          border-top: 1px solid #e4e9eb;
-          padding-top: 16px;
-          color: #6b4b18;
-        }
-        @media (max-width: 640px) {
-          main {
-            padding: 20px 12px;
-          }
-          h1 {
-            font-size: 32px;
-          }
-          .askBox,
-          .result {
-            padding: 16px;
-          }
-        }
-      `}</style>
-    </main>
+      {history.length > 0 && (
+        <>
+          <div className="historyHead">
+            <h2 style={{ fontSize: 20 }}>سجل الأسئلة</h2>
+            <button type="button" className="btn btnGhost" onClick={clearHistory}>
+              🗑 مسح السجل
+            </button>
+          </div>
+          {history.map((entry) => (
+            <AnswerCard key={entry.id} entry={entry} />
+          ))}
+        </>
+      )}
+    </>
   );
 }
