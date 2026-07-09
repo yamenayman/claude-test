@@ -89,6 +89,59 @@ curl -X POST http://localhost:8001/rag/answer \
   -d '{"question":"هل يجوز إنهاء عقد العمل بدون إشعار؟","k":5,"provider":"anthropic"}'
 ```
 
+## Run Locally With Your Own GPU (No Docker)
+
+The fastest way to run everything on your own machine with a **local model** and
+**no Docker/Weaviate** — thanks to the offline retrieval backend
+(`RETRIEVAL_BACKEND=local`, BM25 + knowledge graph over the seeded law texts).
+
+**Recommended local models by GPU VRAM** (via Ollama):
+
+| GPU VRAM | Model | Notes |
+| --- | --- | --- |
+| 6-8 GB (e.g. **RTX 4050 8 GB**) | `qwen2.5:7b-instruct` | Best balance, strong Arabic. |
+| 4-6 GB | `qwen3:4b` | Lighter and faster, good Arabic. |
+| 12 GB+ | `qwen2.5:14b-instruct` | Highest quality. |
+
+1. Install [Ollama](https://ollama.com) and pull a model that fits your GPU:
+
+   ```bash
+   ollama pull qwen2.5:7b-instruct
+   ```
+
+2. Backend (Python 3.11) — from the project root:
+
+   ```bash
+   python -m venv .venv
+   # Windows: .venv\Scripts\activate    Linux/macOS: source .venv/bin/activate
+   pip install -r requirements.txt
+
+   # minimal .env for the local path (no secrets needed)
+   #   RETRIEVAL_BACKEND=local
+   #   LLM_PROVIDER=ollama
+   #   OLLAMA_BASE_URL=http://localhost:11434
+   #   OLLAMA_MODEL=qwen2.5:7b-instruct
+   cp .env.example .env   # then edit as above
+
+   uvicorn api.main:app --host 0.0.0.0 --port 8000
+   ```
+
+3. Frontend (Node 18+) — in another terminal, inside `web/`:
+
+   ```bash
+   cd web
+   npm install
+   set NEXT_PUBLIC_API_URL=http://localhost:8000   # Windows (PowerShell: $env:NEXT_PUBLIC_API_URL=...)
+   # Linux/macOS: NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+   npm run dev
+   ```
+
+4. Open **http://localhost:3000**, pick **Ollama** as the provider, and ask.
+
+`RETRIEVAL_BACKEND=local` needs neither Docker nor the E5 embedding download.
+For dense vector retrieval instead, run the full Docker stack below and set
+`RETRIEVAL_BACKEND=auto`.
+
 ## Windows Prerequisites
 
 - Windows 10 or Windows 11.
